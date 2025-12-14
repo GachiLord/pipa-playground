@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Write;
 use pipa::ir::{gen_ir, dump_ir};
 use pipa::syntax::ast;
 use pipa::vm::Vm;
@@ -13,6 +14,7 @@ pub struct App {
     vars: BTreeMap<String, String>,
     arrays: BTreeMap<String, String>,
     code: String,
+    console: String,
     output: String,
 }
 
@@ -29,6 +31,7 @@ impl Default for App {
             arrays: BTreeMap::from([
                 ("LIST".into(), "first\nsecond\nthird".into()),
             ]),
+            console: String::new(),
             code: String::from(
 r#"<!DOCTYPE html>
 <html>
@@ -125,6 +128,10 @@ impl eframe::App for App {
                 if ui.button("Run").clicked() {
                     run_vm(self);
                 }
+                // console 
+                ui.collapsing("Console", |ui| {
+                    ui.code(&self.console);
+                });
                 ui.separator();
                 ui.label("Output:");
                 ui.code(&self.output);
@@ -222,13 +229,17 @@ fn run_vm(state: &mut App) {
         Ok(_) => {
         },
         Err(e) => {
-            dump_ir(&ir);
-            vm.dump_state();
             dbg!(e);
-            // assert_eq!(e, VmError::EndOfProgram);
-            return;
         }
     }
+    
+    // fill console
+    let mut console = Vec::new();
+    vm.dump_state(&mut console).unwrap();
+    write!(&mut console, "\n").unwrap();
+    dump_ir(&mut console, &ir).unwrap();
 
+    // save changes
     state.output = String::from_utf8(output).unwrap();
+    state.console = String::from_utf8(console).unwrap();
 }
