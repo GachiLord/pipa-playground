@@ -832,19 +832,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eframe_template"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "env_logger",
- "log",
- "serde",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "egui"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2162,6 +2149,28 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pipa"
+version = "0.1.0"
+source = "git+https://github.com/GachiLord/pipa#ed456ad54f37cfad2acd72d8c81c7a931f7213f0"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "pipa-playground"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "env_logger",
+ "log",
+ "pipa",
+ "serde",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "piper"

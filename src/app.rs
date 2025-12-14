@@ -1,25 +1,66 @@
+use std::collections::BTreeMap;
+use pipa::ir::{gen_ir, dump_ir};
+use pipa::syntax::ast;
+use pipa::vm::Vm;
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
-pub struct TemplateApp {
-    // Example stuff:
-    label: String,
-
-    #[serde(skip)] // This how you opt-out of serialization of a field
-    value: f32,
+pub struct App {
+    scale: f32,
+    new_var: (String, String),
+    new_array: (String, String),
+    vars: BTreeMap<String, String>,
+    arrays: BTreeMap<String, String>,
+    code: String,
+    output: String,
 }
 
-impl Default for TemplateApp {
+impl Default for App {
     fn default() -> Self {
         Self {
-            // Example stuff:
-            label: "Hello World!".to_owned(),
-            value: 2.7,
+            scale: 1.0,
+            new_var: (String::new(), String::new()),
+            new_array: (String::new(), String::new()),
+            vars: BTreeMap::from([
+                ("name".into(), "jon".into()),
+                ("sirname".into(), "doe".into())
+            ]),
+            arrays: BTreeMap::from([
+                ("LIST".into(), "first\nsecond\nthird".into()),
+            ]),
+            code: String::from(
+r#"<!DOCTYPE html>
+<html>
+  <head>
+    <title>This is a hello page</title>
+  </head>
+  <body>
+    <div>
+        <p>
+        {{
+            # stirng formatting
+            "\"Hello, $(name) $(sirname)\""
+        }}
+        <p>This page is generated using the pipa language</p>
+        <ul>
+          {{
+            # macro
+            @print_item "$(_index_): $(_item_)" | "\n\t\t\t<li>$(_)</li>"
+
+            # arrays
+            LIST[:] | ?print_item
+          }}
+        </ul>
+    </div>
+  </body>
+</html>"#),
+            output: String::new(),
         }
     }
 }
 
-impl TemplateApp {
+impl App {
     /// Called once before the first frame.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customize the look and feel of egui using
@@ -35,7 +76,7 @@ impl TemplateApp {
     }
 }
 
-impl eframe::App for TemplateApp {
+impl eframe::App for App {
     /// Called by the framework to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
@@ -45,65 +86,149 @@ impl eframe::App for TemplateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
+        ctx.set_theme(egui::Theme::Light);
+        ctx.set_pixels_per_point(self.scale);
 
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            // The top panel is often a good place for a menu bar:
 
-            egui::MenuBar::new().ui(ui, |ui| {
-                // NOTE: no File->Quit on web pages!
-                let is_web = cfg!(target_arch = "wasm32");
-                if !is_web {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
-                    ui.add_space(16.0);
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading("pipa playground");
+                ui.separator();
+                // scale
+                ui.horizontal(|ui| {
+                    ui.label("Page scale:");
+                    if ui.button("-").clicked() {
+                        let v = self.scale - 0.5;
+                        self.scale = if v < 1.0 { 1.0 } else { v }
+                    }
+                    ui.label(self.scale.to_string());
+                    if ui.button("+").clicked() {
+                        let v = self.scale + 0.5;
+                        self.scale = if v > 5.0 { 5.0 } else { v }
+                    }
+                });
+                // display vars
+                ui.label("Constants:");
+                vars_editor(self, ui);
+                // arrays
+                ui.separator();
+                ui.label("Arrays(separated by a newline):");
+                arrays_editor(self, ui);
+                ui.separator();
+                // editor
+                let editor = egui::TextEdit::multiline(&mut self.code)
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(10);
+                ui.add(editor);
+                // execution
+                if ui.button("Run").clicked() {
+                    run_vm(self);
                 }
-
-                egui::widgets::global_theme_preference_buttons(ui);
-            });
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
-            ui.heading("eframe template");
-
-            ui.horizontal(|ui| {
-                ui.label("Write something: ");
-                ui.text_edit_singleline(&mut self.label);
-            });
-
-            ui.add(egui::Slider::new(&mut self.value, 0.0..=10.0).text("value"));
-            if ui.button("Increment").clicked() {
-                self.value += 1.0;
-            }
-
-            ui.separator();
-
-            ui.add(egui::github_link_file!(
-                "https://github.com/emilk/eframe_template/blob/main/",
-                "Source code."
-            ));
-
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                powered_by_egui_and_eframe(ui);
-                egui::warn_if_debug_build(ui);
+                ui.separator();
+                ui.label("Output:");
+                ui.code(&self.output);
             });
         });
     }
 }
 
-fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
+fn vars_editor(state: &mut App, ui: &mut egui::Ui) {
+    let mut to_delete = Vec::with_capacity(state.vars.len());
+    for (key, value) in state.vars.iter_mut() {
+        ui.horizontal(|ui| {
+            ui.label(key);
+            ui.add(egui::TextEdit::multiline(value).desired_rows(1));
+            if ui.button("Remove").clicked() {
+                to_delete.push(key.to_owned());
+            }
+        });
+    }
+    for var in to_delete {
+        state.vars.remove(&var);
+    }
+    // add vars
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label("Powered by ");
-        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
-        ui.label(" and ");
-        ui.hyperlink_to(
-            "eframe",
-            "https://github.com/emilk/egui/tree/master/crates/eframe",
-        );
-        ui.label(".");
+        ui.add(egui::TextEdit::singleline(&mut state.new_var.0).hint_text("Name"));
+        ui.add(egui::TextEdit::multiline(&mut state.new_var.1).desired_rows(1).hint_text("Value"));
+        if ui.button("Add").clicked() {
+            let key: String = state.new_var.0.drain(..).collect();
+            state.vars.insert(key, state.new_var.1.drain(..).collect());
+        }
     });
+}
+
+fn arrays_editor(state: &mut App, ui: &mut egui::Ui) {
+    let mut to_delete = Vec::with_capacity(state.arrays.len());
+    for (key, value) in state.arrays.iter_mut() {
+        ui.horizontal(|ui| {
+            ui.label(key);
+            ui.add(egui::TextEdit::multiline(value).desired_rows(1));
+            if ui.button("Remove").clicked() {
+                to_delete.push(key.to_owned());
+            }
+        });
+    }
+    for var in to_delete {
+        state.arrays.remove(&var);
+    }
+    // add vars
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut state.new_array.0).hint_text("Name"));
+        ui.add(egui::TextEdit::multiline(&mut state.new_array.1).desired_rows(1).hint_text("Values"));
+        if ui.button("Add").clicked() {
+            state.arrays.insert(state.new_array.0.drain(..).collect(), state.new_array.1.drain(..).collect());
+        }
+    });
+}
+
+fn run_vm(state: &mut App) {
+    let mut output = Vec::new();
+    // tokenize + lex
+    let tokens = match ast(&state.code) {
+        Ok(r) => r, 
+        Err(e) => { 
+            e.write_message(&mut output, "index.pipa", &state.code).unwrap();
+            state.output = String::from_utf8(output).unwrap();
+            return;
+        }
+    };
+
+    // ir
+    let ir = match gen_ir(&state.code, tokens) {
+        Ok(ir) => ir,
+        Err(e) => { 
+            e.write_message(&mut output, "index.pipa", &state.code).unwrap();
+            state.output = String::from_utf8(output).unwrap();
+            return;
+        }
+    };
+    // convert vars
+    let mut vars = BTreeMap::new();
+    let mut arrays = BTreeMap::new();
+
+    for (key, value) in state.vars.clone() {
+        vars.insert(key.into(), value.into());
+    }
+
+    for (key, value) in state.arrays.clone() {
+        arrays.insert(key.into(), value.lines().map(|s| s.into()).collect());
+    }
+
+    // run
+    let mut vm = Vm::new(vars, arrays);
+
+    match vm.run(&mut output, &ir) {
+        Ok(_) => {
+        },
+        Err(e) => {
+            dump_ir(&ir);
+            vm.dump_state();
+            dbg!(e);
+            // assert_eq!(e, VmError::EndOfProgram);
+            return;
+        }
+    }
+
+    state.output = String::from_utf8(output).unwrap();
 }
