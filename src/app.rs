@@ -190,6 +190,7 @@ fn arrays_editor(state: &mut App, ui: &mut egui::Ui) {
 }
 
 fn run_vm(state: &mut App) {
+    state.code = state.code.replace("\t", "    ");
     let mut output = Vec::new();
     // tokenize + lex
     let tokens = match ast(&state.code) {
