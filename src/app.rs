@@ -109,6 +109,7 @@ impl eframe::App for App {
                         let v = self.scale + 0.5;
                         self.scale = if v > 5.0 { 5.0 } else { v }
                     }
+                    ui.hyperlink_to("Examples", "https://github.com/GachiLord/pipa/tree/main/examples")
                 });
                 // display vars
                 ui.label("Constants:");
