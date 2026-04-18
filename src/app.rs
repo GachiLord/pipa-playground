@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+use web_time::SystemTime;
 use pipa::ir::{gen_ir, dump_ir, Op};
 use pipa::analysis::{NO_OPT, FULL_OPT};
 use pipa::syntax::{ast, Node};
@@ -15,6 +16,7 @@ pub struct App {
     scale: f32,
     optimize: bool,
     has_err: bool,
+    #[serde(skip)]
     last_edit: Option<SystemTime>,
     new_var: (String, String),
     new_array: (String, String),
