@@ -2153,7 +2153,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 [[package]]
 name = "pipa"
 version = "0.1.0"
-source = "git+https://github.com/GachiLord/pipa#70990b816e8eb7cc23ef345bd8434789bfc5bcb3"
+source = "git+https://github.com/GachiLord/pipa#af9b52e18ca6a4fa4b6fadcab9655fcf873b27b6"
 dependencies = [
  "unicode-segmentation",
 ]

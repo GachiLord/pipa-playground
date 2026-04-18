@@ -1,27 +1,41 @@
 use std::collections::BTreeMap;
-use std::io::Write;
-use pipa::ir::{gen_ir, dump_ir};
-use pipa::syntax::ast;
+use std::time::{Duration, SystemTime};
+use pipa::ir::{gen_ir, dump_ir, Op};
+use pipa::analysis::{NO_OPT, FULL_OPT};
+use pipa::syntax::{ast, Node};
 use pipa::vm::Vm;
+
+
+const AUTO_RUN_DURATION: Duration = Duration::new(1, 0);
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct App {
     scale: f32,
+    optimize: bool,
+    has_err: bool,
+    last_edit: Option<SystemTime>,
     new_var: (String, String),
     new_array: (String, String),
     vars: BTreeMap<String, String>,
     arrays: BTreeMap<String, String>,
     code: String,
-    console: String,
-    output: String,
+    #[serde(skip)]
+    ast: Vec<Node>,
+    #[serde(skip)]
+    ir: Vec<Op>,
+    ir_view: Vec<u8>,
+    output: Vec<u8>,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
             scale: 1.0,
+            optimize: true,
+            has_err: false,
+            last_edit: None,
             new_var: (String::new(), String::new()),
             new_array: (String::new(), String::new()),
             vars: BTreeMap::from([
@@ -31,7 +45,6 @@ impl Default for App {
             arrays: BTreeMap::from([
                 ("LIST".into(), "first\nsecond\nthird".into()),
             ]),
-            console: String::new(),
             code: String::from(
 r#"<!DOCTYPE html>
 <html>
@@ -58,7 +71,10 @@ r#"<!DOCTYPE html>
     </div>
   </body>
 </html>"#),
-            output: String::new(),
+            ast: Vec::new(),
+            ir: Vec::new(),
+            ir_view: Vec::new(),
+            output: Vec::new(),
         }
     }
 }
@@ -124,18 +140,40 @@ impl eframe::App for App {
                     .code_editor()
                     .desired_width(f32::INFINITY)
                     .desired_rows(10);
-                ui.add(editor);
+                let editor_response = ui.add(editor);
+                // optimizations
+                if ui.checkbox(&mut self.optimize, "Optimize").changed() {
+                    compile(self);
+                }
+                // compilation
+                if editor_response.changed() {
+                    self.last_edit = Some(SystemTime::now());
+                }
+                if editor_response.lost_focus() {
+                    compile(self);
+                }
+                if let Some(edit) = self.last_edit {
+
+                    if edit.elapsed().unwrap() >= AUTO_RUN_DURATION {
+                        compile(self);
+                        run_vm(self);
+                        self.last_edit = None;
+                    }
+                }
                 // execution
                 if ui.button("Run").clicked() {
                     run_vm(self);
                 }
                 // console 
-                ui.collapsing("Console", |ui| {
-                    ui.code(&self.console);
+                ui.collapsing("IR", |ui| {
+                    if self.ir_view.is_empty() {
+                        compile(self);
+                    }
+                    ui.code(str::from_utf8(&self.ir_view).unwrap());
                 });
                 ui.separator();
                 ui.label("Output:");
-                ui.code(&self.output);
+                ui.code(str::from_utf8(&self.output).unwrap());
             });
         });
     }
@@ -190,58 +228,65 @@ fn arrays_editor(state: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn run_vm(state: &mut App) {
-    state.code = state.code.replace("\t", "    ");
-    let mut output = Vec::new();
+fn compile(state: &mut App) {
     // tokenize + lex
-    let tokens = match ast(&state.code) {
-        Ok(r) => r, 
+    match ast(&state.code) {
+        Ok(r) => {
+            state.ast = r;
+            state.has_err = false;
+        }, 
         Err(e) => { 
-            e.write_message(&mut output, "index.pipa", &state.code).unwrap();
-            state.output = String::from_utf8(output).unwrap();
+            state.output.clear();
+            e.write_message(&mut state.output, "index.pipa", &state.code).unwrap();
+            state.has_err = true;
             return;
         }
     };
+    let opt = if state.optimize { FULL_OPT } else { NO_OPT };
 
     // ir
-    let ir = match gen_ir(&state.code, tokens) {
-        Ok(ir) => ir,
-        Err(e) => { 
-            e.write_message(&mut output, "index.pipa", &state.code).unwrap();
-            state.output = String::from_utf8(output).unwrap();
+    match gen_ir(&state.code, state.ast.clone(), opt) {
+        Ok(ir) => {
+            state.ir = ir;
+            state.has_err = false;
+        },
+        Err(e) => {
+            state.output.clear();
+            e.write_message(&mut state.output, "index.pipa", &state.code).unwrap();
+            state.has_err = true;
             return;
         }
     };
-    // convert vars
-    let mut vars = BTreeMap::new();
-    let mut arrays = BTreeMap::new();
 
-    for (key, value) in state.vars.clone() {
-        vars.insert(key.into(), value.into());
-    }
+    state.ir_view.clear();
+    dump_ir(&mut state.ir_view, &state.ir).unwrap();
+}
+
+fn run_vm(state: &mut App) {
+    // convert arrays
+    let mut arrays = BTreeMap::new();
 
     for (key, value) in state.arrays.clone() {
         arrays.insert(key.into(), value.lines().map(|s| s.into()).collect());
     }
 
+    // compile if first run
+    if state.ir.is_empty() {
+        compile(state);
+    }
+    if state.has_err {
+        return;
+    }
+    // clean output before running
+    state.output.clear();
     // run
-    let mut vm = Vm::new(vars, arrays);
+    let mut vm = Vm::new(&state.vars, &arrays);
 
-    match vm.run(&mut output, &ir) {
+    match vm.run(&mut state.output, &state.ir) {
         Ok(_) => {
         },
         Err(e) => {
             dbg!(e);
         }
     }
-    
-    // fill console
-    let mut console = Vec::new();
-    vm.dump_state(&mut console).unwrap();
-    write!(&mut console, "\n").unwrap();
-    dump_ir(&mut console, &ir).unwrap();
-
-    // save changes
-    state.output = String::from_utf8(output).unwrap();
-    state.console = String::from_utf8(console).unwrap();
 }
