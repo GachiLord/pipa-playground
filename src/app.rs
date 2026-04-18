@@ -145,6 +145,10 @@ impl eframe::App for App {
                 if ui.checkbox(&mut self.optimize, "Optimize").changed() {
                     compile(self);
                 }
+                // handle first run
+                if self.ir_view.is_empty() || self.ast.is_empty() {
+                    compile(self);
+                }
                 // compilation
                 if editor_response.changed() {
                     self.last_edit = Some(SystemTime::now());
@@ -164,13 +168,15 @@ impl eframe::App for App {
                 if ui.button("Run").clicked() {
                     run_vm(self);
                 }
-                // console 
+                // ir
                 ui.collapsing("IR", |ui| {
-                    if self.ir_view.is_empty() {
-                        compile(self);
-                    }
                     ui.code(str::from_utf8(&self.ir_view).unwrap());
                 });
+                // ast
+                ui.collapsing("AST", |ui| {
+                    ast_view(&self.code, &self.ast, ui, 0);
+                });
+                // output
                 ui.separator();
                 ui.label("Output:");
                 ui.code(str::from_utf8(&self.output).unwrap());
@@ -228,6 +234,28 @@ fn arrays_editor(state: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+fn ast_view(code: &str, ast: &Vec<Node>, ui: &mut egui::Ui, mut parent_id: usize) {
+    for node in ast {
+        let s = code.get(node.first_char..node.end_char)
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or_default();
+
+        parent_id += 1;
+
+        if node.children.is_empty() {
+            ui.push_id(parent_id, |ui| ui.label(s));
+        } else {
+            ui.push_id(parent_id, |ui| {
+                ui.collapsing(s, |ui| {
+                    ast_view(code, &node.children, ui, parent_id + 1);
+                });
+            });
+        }
+    }
+}
+
 fn compile(state: &mut App) {
     // tokenize + lex
     match ast(&state.code) {
@@ -271,9 +299,6 @@ fn run_vm(state: &mut App) {
     }
 
     // compile if first run
-    if state.ir.is_empty() {
-        compile(state);
-    }
     if state.has_err {
         return;
     }
